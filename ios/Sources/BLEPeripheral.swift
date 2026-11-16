@@ -6,7 +6,9 @@ import Foundation
 final class BLEPeripheral: NSObject, ObservableObject {
     static let serviceUUID = CBUUID(string: "A1B2C3D4-E5F6-4789-ABCD-000000000001")
     static let mouseUUID = CBUUID(string: "A1B2C3D4-E5F6-4789-ABCD-000000000002")
-    static let textUUID = CBUUID(string: "A1B2C3D4-E5F6-4789-ABCD-000000000003")
+    // テキスト特性は v2.8 で …0003 から …0004 に移行した。旧特性に紐づく
+    // 両側スタックの腐った購読/キャッシュ状態を回避するため。
+    static let textUUID = CBUUID(string: "A1B2C3D4-E5F6-4789-ABCD-000000000004")
 
     @Published var bluetoothReady = false
     @Published var isAdvertising = false

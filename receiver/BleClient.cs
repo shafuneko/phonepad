@@ -13,7 +13,8 @@ internal sealed class BleClient : IDisposable
 {
     public static readonly Guid ServiceUuid = Guid.Parse("A1B2C3D4-E5F6-4789-ABCD-000000000001");
     public static readonly Guid MouseUuid = Guid.Parse("A1B2C3D4-E5F6-4789-ABCD-000000000002");
-    public static readonly Guid TextUuid = Guid.Parse("A1B2C3D4-E5F6-4789-ABCD-000000000003");
+    // v2.8: テキスト特性は …0003 から …0004 に移行（旧特性に紐づく腐った状態の回避）
+    public static readonly Guid TextUuid = Guid.Parse("A1B2C3D4-E5F6-4789-ABCD-000000000004");
 
     private readonly BluetoothLEAdvertisementWatcher _watcher;
     private BluetoothLEDevice? _device;
@@ -128,36 +129,36 @@ internal sealed class BleClient : IDisposable
     }
 
     /// <summary>
-    /// サービス参照。まず OS キャッシュを使い（列挙の往復が少なく速い）、
-    /// 駄目なら実問い合わせにフォールバックする。
+    /// サービス参照。キャッシュの毒が疑われるため実問い合わせを優先し、
+    /// 駄目なら OS キャッシュにフォールバックする。
     /// </summary>
     private static async Task<GattDeviceService> GetServiceAsync(BluetoothLEDevice device)
     {
-        var cached = await device.GetGattServicesForUuidAsync(ServiceUuid, BluetoothCacheMode.Cached);
-        if (cached.Status == GattCommunicationStatus.Success && cached.Services.Count > 0)
-            return cached.Services[0];
         var fresh = await device.GetGattServicesForUuidAsync(ServiceUuid, BluetoothCacheMode.Uncached);
-        if (fresh.Status != GattCommunicationStatus.Success || fresh.Services.Count == 0)
+        if (fresh.Status == GattCommunicationStatus.Success && fresh.Services.Count > 0)
+            return fresh.Services[0];
+        var cached = await device.GetGattServicesForUuidAsync(ServiceUuid, BluetoothCacheMode.Cached);
+        if (cached.Status != GattCommunicationStatus.Success || cached.Services.Count == 0)
         {
-            Log($"service lookup FAILED: cached={cached.Status} uncached={fresh.Status}");
+            Log($"service lookup FAILED: uncached={fresh.Status} cached={cached.Status}");
             throw new InvalidOperationException("service not found");
         }
-        return fresh.Services[0];
+        return cached.Services[0];
     }
 
     private static async Task SubscribeAsync(GattDeviceService service, Guid uuid, Action<byte[]> handler)
     {
-        var result = await service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Cached);
+        var result = await service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached);
         if (result.Status != GattCommunicationStatus.Success || result.Characteristics.Count == 0)
         {
-            var fresh = await service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached);
-            if (fresh.Status == GattCommunicationStatus.Success && fresh.Characteristics.Count > 0)
+            var cached = await service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Cached);
+            if (cached.Status == GattCommunicationStatus.Success && cached.Characteristics.Count > 0)
             {
-                result = fresh;
+                result = cached;
             }
             else
             {
-                Log($"subscribe FAILED (characteristic lookup): {uuid} cached={result.Status} uncached={fresh.Status}");
+                Log($"subscribe FAILED (characteristic lookup): {uuid} uncached={result.Status} cached={cached.Status}");
                 throw new InvalidOperationException($"characteristic not found: {uuid}");
             }
         }
@@ -176,7 +177,9 @@ internal sealed class BleClient : IDisposable
             Log($"subscribe FAILED (CCCD write): {uuid} status={status}");
             throw new InvalidOperationException("subscribe failed");
         }
-        Log($"subscribed OK: {uuid}");
+        // 書き込めた「つもり」になっていないか、CCCD を読み返して裏を取る
+        var readBack = await ch.ReadClientCharacteristicConfigurationDescriptorAsync();
+        Log($"subscribed OK: {uuid} cccd={(readBack.Status == GattCommunicationStatus.Success ? readBack.ClientCharacteristicConfigurationDescriptor.ToString() : "readback-" + readBack.Status)}");
     }
 
     private void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
